@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#1f1927" />
+  <title>Muster Status</title>
+  <meta name="description" content="Whether Muster's website, messages, calls and desktop app are working right now, and over the last 90 days." />
+  <link rel="icon" href="icon.png" />
+  <link rel="stylesheet" href="status.css" />
+  <script src="config.js"></script>
+  <script src="status.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="home" href="https://musterchat.com">Muster</a>
+    <span class="tag">Status</span>
+    <a class="open" href="https://musterchat.com">Open Muster</a>
+  </header>
+
+  <main>
+    <section class="hero" id="hero" data-state="loading" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <h1 id="headline">Checking Muster…</h1>
+        <p class="sub" id="checked">Loading the latest checks.</p>
+      </div>
+    </section>
+
+    <p class="stale" id="stale" hidden></p>
+
+    <section id="active" class="incidents active" hidden>
+      <h2>Happening now</h2>
+      <div id="active-list"></div>
+    </section>
+
+    <section class="components" aria-labelledby="components-title">
+      <div class="section-head">
+        <h2 id="components-title">Services</h2>
+        <div class="legend" aria-hidden="true">
+          <span><i class="sw up"></i>Working</span>
+          <span><i class="sw slow"></i>Slow or partly down</span>
+          <span><i class="sw down"></i>Down</span>
+        </div>
+      </div>
+      <ul id="components" class="list"></ul>
+    </section>
+
+    <section class="incidents" aria-labelledby="history-title">
+      <h2 id="history-title">The last 14 days</h2>
+      <div id="history"><p class="empty">Loading…</p></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Muster checks each service every few minutes from outside its own servers, so this page keeps working when they don't. Times are shown in your own time zone.</p>
+    <p>Something wrong that isn't shown here? Email <a href="mailto:contact@musterchat.com">contact@musterchat.com</a>.</p>
+    <p class="legal">SKMB Software Ltd, registered in England and Wales, company number 17532454 · <a href="https://musterchat.com/terms">Terms</a> · <a href="https://musterchat.com/privacy">Privacy</a></p>
+  </footer>
+</div>
+<noscript><p class="wrap">This page needs JavaScript to show the latest checks.</p></noscript>
+</body>
+</html>

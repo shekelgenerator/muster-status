@@ -1,0 +1,48 @@
+# Checks Muster every 5 minutes and saves the results to the `data` branch,
+# which the page reads. GitHub may start scheduled runs a few minutes late.
+name: Check Muster
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One run at a time, so two runs never write the data branch together.
+concurrency:
+  group: check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Get the last results
+        env:
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git clone --quiet --depth 1 --branch data "https://x-access-token:${TOKEN}@github.com/${REPO}.git" data || mkdir -p data
+      - name: Check every service
+        run: node check.js data
+      - name: Save the results
+        env:
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The data branch is always one commit, replaced each run, so the
+        # repository doesn't grow by 288 commits a day.
+        run: |
+          cd data
+          rm -rf .git
+          git init --quiet -b data
+          git config user.name "muster-status"
+          git config user.email "muster-status@users.noreply.github.com"
+          git add status.json daily.json outages.json
+          git commit --quiet -m "Checks at $(date -u +%FT%TZ)"
+          git push --quiet --force "https://x-access-token:${TOKEN}@github.com/${REPO}.git" data

@@ -1,0 +1,11 @@
+{
+  "name": "muster-status",
+  "private": true,
+  "description": "The Muster status page: checks every 5 minutes from GitHub Actions, page on GitHub Pages.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "node check.js data",
+    "test": "node --test test/check.test.js test/page.test.js"
+  }
+}

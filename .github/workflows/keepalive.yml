@@ -1,0 +1,24 @@
+# GitHub switches off scheduled workflows in a public repository after 60
+# days without activity. Once a week this switches the checks back on, which
+# resets that clock.
+name: Keep the checks running
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api -X PUT "repos/${REPO}/actions/workflows/check.yml/enable"
+          gh api -X PUT "repos/${REPO}/actions/workflows/keepalive.yml/enable"

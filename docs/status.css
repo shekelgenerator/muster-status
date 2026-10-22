@@ -140,6 +140,7 @@ section.components, section.incidents { margin-top: 40px; }
   color: var(--text); font-size: 13px; line-height: 1.4; box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
 }
 .tip strong { display: block; color: var(--strong); font-weight: 680; }
+.tip .tip-span { display: block; font-variant-numeric: tabular-nums; }
 
 /* incidents and outages */
 .event { padding: 16px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--gunmetal); }

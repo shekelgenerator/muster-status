@@ -43,16 +43,26 @@ describe('daily counts', () => {
 });
 
 describe('outages', () => {
-  test('opens on down, counts while down, closes when back', () => {
-    let o = C.updateOutages([], { calls: 'down', website: 'up' }, T);
-    assert.deepEqual(o, [{ component: 'calls', started_at: '2026-10-21T12:00:00.000Z', ended_at: null, checks: 1 }]);
-    o = C.updateOutages(o, { calls: 'down' }, T + 300e3);
-    assert.equal(o[0].checks, 2);
-    assert.equal(o.length, 1);
-    o = C.updateOutages(o, { calls: 'slow' }, T + 600e3);
-    assert.equal(o[0].ended_at, '2026-10-21T12:10:00.000Z', 'slow counts as back');
-    o = C.updateOutages(o, { calls: 'down' }, T + 900e3);
+  // A confirmed-down component as buildStatus gives it.
+  const down = (first, last, fails = 2) => ({ status: 'down', fails, first_failed_at: first, last_failed_at: last });
+  test('opens dated from the first failed check, counts while down', () => {
+    let o = C.updateOutages([], { calls: down('2026-10-21T11:55:00.000Z', '2026-10-21T12:00:00.000Z'), website: { status: 'up', fails: 0 } }, T);
+    assert.deepEqual(o, [{ component: 'calls', started_at: '2026-10-21T11:55:00.000Z', ended_at: null, last_failed_at: '2026-10-21T12:00:00.000Z', checks: 2 }]);
+    o = C.updateOutages(o, { calls: down('2026-10-21T11:55:00.000Z', '2026-10-21T12:05:00.000Z', 3) }, T + 300e3);
+    assert.equal(o[0].checks, 3);
+    assert.equal(o[0].last_failed_at, '2026-10-21T12:05:00.000Z');
+  });
+  // Sam, 22 Oct: a late GitHub run must not stretch an outage.
+  test('ends at the last failed check, however late the run that sees it back', () => {
+    let o = C.updateOutages([], { calls: down('2026-10-21T11:55:00.000Z', '2026-10-21T12:00:00.000Z') }, T);
+    o = C.updateOutages(o, { calls: { status: 'slow', fails: 0 } }, T + 47 * 60e3);
+    assert.equal(o[0].ended_at, '2026-10-21T12:00:00.000Z', 'not 12:47, when the late run found it back');
+    o = C.updateOutages(o, { calls: down('2026-10-21T13:00:00.000Z', '2026-10-21T13:05:00.000Z') }, T + 3900e3);
     assert.equal(o.length, 2, 'a new outage after it ended');
+  });
+  test('an outage from before this change (no last_failed_at) ends when it was seen back', () => {
+    const o = C.updateOutages([{ component: 'calls', started_at: '2026-10-21T11:00:00Z', ended_at: null, checks: 4 }], { calls: { status: 'up', fails: 0 } }, T);
+    assert.equal(o[0].ended_at, '2026-10-21T12:00:00.000Z');
   });
   test('outages that ended over 90 days ago are dropped, open ones never', () => {
     const old = [
@@ -65,27 +75,75 @@ describe('outages', () => {
   });
 });
 
+// Sam, 22 Oct: down only after two failed checks in a row.
+describe('two failed checks in a row', () => {
+  test('one failure is a blip: shown as it was, not down', () => {
+    const k = C.confirm({ status: 'up', fails: 0 }, 'down', T);
+    assert.deepEqual(k, { status: 'up', fails: 1, first_failed_at: '2026-10-21T12:00:00.000Z', last_failed_at: '2026-10-21T12:00:00.000Z', unconfirmed: true });
+    assert.equal(C.confirm({ status: 'slow', fails: 0 }, 'down', T).status, 'slow');
+    assert.equal(C.confirm(null, 'down', T).status, 'up', 'the very first run');
+    assert.equal(C.dayStateOf(k), 'slow', 'it counts as slow for the day');
+  });
+  test('the second failure in a row marks it down, dated from the first', () => {
+    const first = C.confirm({ status: 'up', fails: 0 }, 'down', T);
+    const second = C.confirm(Object.assign({ status: first.status }, first), 'down', T + 300e3);
+    assert.equal(second.status, 'down');
+    assert.equal(second.fails, 2);
+    assert.equal(second.first_failed_at, '2026-10-21T12:00:00.000Z');
+    assert.equal(second.last_failed_at, '2026-10-21T12:05:00.000Z');
+    assert.equal(C.dayStateOf(second), 'down');
+  });
+  test('a pass in between starts the count again', () => {
+    const k = C.confirm({ status: 'up', fails: 0 }, 'down', T);
+    const back = C.confirm(Object.assign({ status: 'up' }, k), 'up', T + 300e3);
+    assert.equal(back.fails, 0);
+    const again = C.confirm(Object.assign({ status: 'up' }, back), 'down', T + 600e3);
+    assert.equal(again.status, 'up');
+    assert.equal(again.fails, 1);
+  });
+  test('a status.json from before this change: already down stays down', () => {
+    const k = C.confirm({ status: 'down', since: '2026-10-21T11:00:00.000Z' }, 'down', T);
+    assert.equal(k.status, 'down');
+    assert.equal(k.first_failed_at, '2026-10-21T11:00:00.000Z');
+  });
+  test('the day counts: a lone failure is slow, and moves to down when the next check confirms it', () => {
+    let d = C.updateDaily({}, { calls: 'slow' }, T);
+    assert.deepEqual(d.calls['2026-10-21'], { n: 1, up: 0, slow: 1, down: 0 });
+    d = C.updateDaily(d, { calls: 'down' }, T + 300e3, [{ id: 'calls', day: '2026-10-21' }]);
+    assert.deepEqual(d.calls['2026-10-21'], { n: 2, up: 0, slow: 0, down: 2 });
+    d = C.updateDaily(d, { calls: 'down' }, T + 600e3, [{ id: 'calls', day: '2026-10-21' }]);
+    assert.deepEqual(d.calls['2026-10-21'], { n: 3, up: 0, slow: 0, down: 3 }, 'nothing to move: unchanged');
+  });
+});
+
 describe('status.json', () => {
   const comps = [
     { id: 'website', name: 'Website', description: 'd', check: { slowMs: 1000 } },
     { id: 'calls', name: 'Calls', description: 'd', check: { slowMs: 1000 } },
   ];
-  test('names, states, latency and the reason when down', () => {
-    const s = C.buildStatus(comps, { website: { ok: true, ms: 123.6 }, calls: { ok: false, ms: 10000, detail: 'HTTP 503' } }, null, T);
+  test('names, states, latency and the reason when down (two failures in a row)', () => {
+    const fail = { website: { ok: true, ms: 123.6 }, calls: { ok: false, ms: 10000, detail: 'HTTP 503' } };
+    const once = C.buildStatus(comps, fail, null, T);
+    assert.equal(once.overall, 'up', 'one failure is not an outage');
+    assert.equal(once.components[1].detail, null);
+    assert.equal(once.components[1].unconfirmed, true);
+    const s = C.buildStatus(comps, fail, once, T + 300e3);
     assert.equal(s.overall, 'down');
-    assert.equal(s.updated_at, '2026-10-21T12:00:00.000Z');
-    assert.deepEqual(s.components[0], { id: 'website', name: 'Website', description: 'd', status: 'up', latency_ms: 124, detail: null, since: s.updated_at });
+    assert.equal(s.updated_at, '2026-10-21T12:05:00.000Z');
+    assert.deepEqual(s.components[0], { id: 'website', name: 'Website', description: 'd', status: 'up', latency_ms: 124, detail: null, since: '2026-10-21T12:00:00.000Z', fails: 0, first_failed_at: null, last_failed_at: null });
     assert.equal(s.components[1].latency_ms, null);
     assert.equal(s.components[1].detail, 'HTTP 503');
+    assert.equal(s.components[1].since, '2026-10-21T12:00:00.000Z', 'down since the first failed check');
   });
   test('since stays when the state is unchanged, moves when it changes', () => {
     const prev = C.buildStatus(comps, { website: { ok: true, ms: 1 }, calls: { ok: true, ms: 1 } }, null, T);
-    const next = C.buildStatus(comps, { website: { ok: true, ms: 1 }, calls: { ok: false, detail: 'x' } }, prev, T + 300e3);
+    const next = C.buildStatus(comps, { website: { ok: true, ms: 1 }, calls: { ok: true, ms: 1500 } }, prev, T + 300e3);
     assert.equal(next.components[0].since, '2026-10-21T12:00:00.000Z');
     assert.equal(next.components[1].since, '2026-10-21T12:05:00.000Z');
   });
-  test('a component with no result counts as down', () => {
-    const s = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, null, T);
+  test('a component with no result counts as a failed check', () => {
+    const once = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, null, T);
+    const s = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, once, T + 300e3);
     assert.equal(s.components[1].status, 'down');
     assert.equal(s.components[1].detail, 'not checked');
   });
@@ -160,14 +218,27 @@ describe('a whole run', () => {
     ];
     let callsUp = false;
     const fake = async (c) => (c === comps[1].check && !callsUp ? { ok: false, ms: 1, detail: 'HTTP 502' } : { ok: true, ms: 50 });
+    const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+    // A blip: one failed check, then fine. No outage; the day shows one slow.
     await C.main(dir, comps, T, fake);
+    assert.deepEqual(read('outages.json'), []);
     callsUp = true;
-    const s = await C.main(dir, comps, T + 300e3, fake);
+    let s = await C.main(dir, comps, T + 300e3, fake);
     assert.equal(s.overall, 'up');
-    const daily = JSON.parse(fs.readFileSync(path.join(dir, 'daily.json'), 'utf8'));
-    assert.deepEqual(daily.calls['2026-10-21'], { n: 2, up: 1, slow: 0, down: 1 });
-    const outages = JSON.parse(fs.readFileSync(path.join(dir, 'outages.json'), 'utf8'));
-    assert.deepEqual(outages, [{ component: 'calls', started_at: '2026-10-21T12:00:00.000Z', ended_at: '2026-10-21T12:05:00.000Z', checks: 1 }]);
+    assert.deepEqual(read('daily.json').calls['2026-10-21'], { n: 2, up: 1, slow: 1, down: 0 });
+    assert.deepEqual(read('outages.json'), []);
+    // A real outage: three failed checks in a row, then the run that finds it
+    // back is 40 minutes late. It's dated from the first failure to the last.
+    callsUp = false;
+    await C.main(dir, comps, T + 600e3, fake);
+    s = await C.main(dir, comps, T + 900e3, fake);
+    assert.equal(s.overall, 'down');
+    await C.main(dir, comps, T + 1200e3, fake);
+    callsUp = true;
+    s = await C.main(dir, comps, T + 1200e3 + 40 * 60e3, fake);
+    assert.equal(s.overall, 'up');
+    assert.deepEqual(read('outages.json'), [{ component: 'calls', started_at: '2026-10-21T12:10:00.000Z', ended_at: '2026-10-21T12:20:00.000Z', last_failed_at: '2026-10-21T12:20:00.000Z', checks: 3 }]);
+    assert.deepEqual(read('daily.json').calls['2026-10-21'], { n: 6, up: 2, slow: 1, down: 3 }, 'the first failure of the outage moved from slow to down');
   });
   test('the real config: every component has a name, description and a check the runner knows', () => {
     const comps = require('../components');

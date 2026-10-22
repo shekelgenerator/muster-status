@@ -15,6 +15,11 @@ const path = require('path');
 const DAYS = 90;
 const TIMEOUT_MS = 10000;
 const RETRY_AFTER_MS = 5000;
+// A service is marked down only after this many checks in a row fail (Sam,
+// 22 Oct). One failed check (after its retry) is a blip: shown as it was,
+// counted as "slow" for the day, and if the next check fails too the outage
+// is dated from the first failure.
+const CONFIRM = 2;
 
 // ── pure logic (tested in test/check.test.js) ─────────────────────────────
 
@@ -33,13 +38,37 @@ function overall(components) {
   return 'up';
 }
 
+// One component's state after this run, with the two-in-a-row rule.
+// prev is its entry in the last status.json; raw is this run's classify().
+function confirm(prev, raw, now) {
+  const iso = new Date(now).toISOString();
+  if (raw !== 'down') return { status: raw, fails: 0, first_failed_at: null, last_failed_at: null };
+  // Files written before this rule have no count: a component already shown
+  // down counts as confirmed.
+  const before = prev ? (Number.isFinite(prev.fails) ? prev.fails : prev.status === 'down' ? CONFIRM : 0) : 0;
+  const fails = before + 1;
+  const first = before > 0 && prev.first_failed_at ? prev.first_failed_at : (before > 0 && prev.since ? prev.since : iso);
+  if (fails >= CONFIRM) return { status: 'down', fails, first_failed_at: fails === 1 ? iso : first, last_failed_at: iso };
+  const shown = prev && prev.status && prev.status !== 'down' ? prev.status : 'up';
+  return { status: shown, fails, first_failed_at: iso, last_failed_at: iso, unconfirmed: true };
+}
+
+// What a run counts as for the day's bar: a lone failed check counts as slow.
+function dayStateOf(c) { return c.unconfirmed ? 'slow' : c.status; }
+
 // Add this run's states to the per-day counts and drop days older than 90.
-function updateDaily(daily, states, now) {
+// `fixes` are earlier lone failures that turned out to be the start of an
+// outage: [{ id, day }], moved from slow to down on that day.
+function updateDaily(daily, states, now, fixes = []) {
   const out = {};
   const today = dayKey(now);
   const oldest = dayKey(now - (DAYS - 1) * 86400e3);
   for (const [id, status] of Object.entries(states)) {
     const days = Object.assign({}, (daily && daily[id]) || {});
+    for (const f of fixes) {
+      if (f.id !== id || !days[f.day] || !(days[f.day].slow > 0)) continue;
+      days[f.day] = Object.assign({}, days[f.day], { slow: days[f.day].slow - 1, down: days[f.day].down + 1 });
+    }
     const d = Object.assign({ n: 0, up: 0, slow: 0, down: 0 }, days[today]);
     d.n += 1;
     d[status] += 1;
@@ -50,17 +79,21 @@ function updateDaily(daily, states, now) {
   return out;
 }
 
-// Open an outage when a component goes down, close it when it comes back.
+// Open an outage when a component is confirmed down (dated from its first
+// failed check), close it when it comes back. It ends at the last failed
+// check, not at the run that found it working again, so a late GitHub run
+// doesn't make it look longer than it was.
+// states: id -> a component from buildStatus (or just its status string).
 function updateOutages(outages, states, now) {
   const list = (outages || []).map((o) => Object.assign({}, o));
   const iso = new Date(now).toISOString();
-  for (const [id, status] of Object.entries(states)) {
+  for (const [id, st] of Object.entries(states)) {
+    const c = typeof st === 'string' ? { status: st, fails: st === 'down' ? CONFIRM : 0, first_failed_at: iso, last_failed_at: iso } : st;
     const open = list.find((o) => o.component === id && !o.ended_at);
-    if (status === 'down') {
-      if (open) open.checks += 1;
-      else list.push({ component: id, started_at: iso, ended_at: null, checks: 1 });
+    if (c.status === 'down') {
+      if (open) { open.checks += 1; open.last_failed_at = c.last_failed_at || iso; } else list.push({ component: id, started_at: c.first_failed_at || iso, ended_at: null, last_failed_at: c.last_failed_at || iso, checks: c.fails || 1 });
     } else if (open) {
-      open.ended_at = iso;
+      open.ended_at = open.last_failed_at || iso; // older files: when it was seen back
     }
   }
   const cutoff = now - DAYS * 86400e3;
@@ -73,17 +106,24 @@ function buildStatus(components, results, previous, now) {
   const iso = new Date(now).toISOString();
   const list = components.map((c) => {
     const r = results[c.id] || { ok: false, detail: 'not checked' };
-    const status = classify(r, c.check.slowMs);
     const before = prev.get(c.id);
-    return {
+    const k = confirm(before, classify(r, c.check.slowMs), now);
+    const status = k.status;
+    const out = {
       id: c.id,
       name: c.name,
       description: c.description,
       status,
       latency_ms: r.ok ? Math.round(r.ms) : null,
       detail: status === 'down' ? String(r.detail || 'no answer').slice(0, 120) : null,
-      since: before && before.status === status && before.since ? before.since : iso,
+      since: status === 'down' && k.fails === CONFIRM ? k.first_failed_at
+        : before && before.status === status && before.since ? before.since : iso,
+      fails: k.fails,
+      first_failed_at: k.first_failed_at,
+      last_failed_at: k.last_failed_at,
     };
+    if (k.unconfirmed) out.unconfirmed = true;
+    return out;
   });
   return { updated_at: iso, overall: overall(list), components: list };
 }
@@ -163,14 +203,17 @@ async function main(dir, components = require('./components'), now = Date.now(),
   const results = {};
   await Promise.all(components.map(async (c) => { results[c.id] = await check(c.check); }));
   const status = buildStatus(components, results, readJson(path.join(dir, 'status.json'), null), now);
-  const states = Object.fromEntries(status.components.map((c) => [c.id, c.status]));
+  const dayStates = Object.fromEntries(status.components.map((c) => [c.id, dayStateOf(c)]));
+  // A lone failure last run that this run confirmed: it was the outage's start.
+  const fixes = status.components.filter((c) => c.status === 'down' && c.fails === CONFIRM && c.first_failed_at !== status.updated_at)
+    .map((c) => ({ id: c.id, day: dayKey(Date.parse(c.first_failed_at)) }));
   writeJson(path.join(dir, 'status.json'), status);
-  writeJson(path.join(dir, 'daily.json'), updateDaily(readJson(path.join(dir, 'daily.json'), {}), states, now));
-  writeJson(path.join(dir, 'outages.json'), updateOutages(readJson(path.join(dir, 'outages.json'), []), states, now));
+  writeJson(path.join(dir, 'daily.json'), updateDaily(readJson(path.join(dir, 'daily.json'), {}), dayStates, now, fixes));
+  writeJson(path.join(dir, 'outages.json'), updateOutages(readJson(path.join(dir, 'outages.json'), []), Object.fromEntries(status.components.map((c) => [c.id, c])), now));
   return status;
 }
 
-module.exports = { classify, overall, updateDaily, updateOutages, buildStatus, checkHttp, checkWs, checkWithRetry, main, dayKey, DAYS };
+module.exports = { classify, overall, confirm, dayStateOf, CONFIRM, updateDaily, updateOutages, buildStatus, checkHttp, checkWs, checkWithRetry, main, dayKey, DAYS };
 
 if (require.main === module) {
   main(process.argv[2] || 'data').then((s) => {

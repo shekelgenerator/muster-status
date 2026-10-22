@@ -28,6 +28,31 @@
     return Math.round(total / 60000);
   }
 
+  // Each outage that touched a UTC day, as UK times (Sam, 22 Oct), e.g.
+  // "22:14–22:52", or "22:14–now" while it's still going. An outage running
+  // past midnight shows its real start and end, with the date when it isn't
+  // that day's.
+  var UK = 'Europe/London';
+  var fmtUkTime = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: UK });
+  var fmtUkDate = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: UK });
+  function ukDay(ms) { return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: UK }).format(ms); }
+  function outageSpans(outages, id, key, now) {
+    var start = Date.parse(key + 'T00:00:00Z');
+    var end = start + DAY_MS;
+    var out = [];
+    (outages || []).forEach(function (o) {
+      if (o.component !== id) return;
+      var a = Date.parse(o.started_at);
+      var b = o.ended_at ? Date.parse(o.ended_at) : null;
+      if (a < end && (b == null ? now : b) >= start) out.push({ start: a, end: b });
+    });
+    return out.sort(function (x, y) { return x.start - y.start; });
+  }
+  function spanText(span, key) {
+    var t = function (ms, sameAs) { return (ukDay(ms) === sameAs ? '' : fmtUkDate.format(ms) + ' ') + fmtUkTime.format(ms); };
+    return t(span.start, key) + '\u2013' + (span.end == null ? 'now' : t(span.end, ukDay(span.start)));
+  }
+
   // A day's colour: grey with no checks, red for a real outage (2% of the
   // day's checks, about half an hour), amber for any failure or lots of slow.
   function dayState(d) {
@@ -102,7 +127,7 @@
     return { active: active.sort(newest), past: past.sort(newest) };
   }
 
-  var api = { dayKey: dayKey, downMinutes: downMinutes, dayState: dayState, uptime: uptime, headline: headline, ago: ago, duration: duration, events: events };
+  var api = { dayKey: dayKey, downMinutes: downMinutes, outageSpans: outageSpans, spanText: spanText, dayState: dayState, uptime: uptime, headline: headline, ago: ago, duration: duration, events: events };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
   window.MusterStatus = api;
 
@@ -141,6 +166,8 @@
     tip.textContent = '';
     tip.appendChild(el('strong', null, target.dataset.day));
     tip.appendChild(document.createTextNode(target.dataset.note));
+    // The times of each outage that day, UK time, one per line.
+    (target.dataset.spans ? target.dataset.spans.split('|') : []).forEach(function (line) { tip.appendChild(el('span', 'tip-span', line)); });
     tip.hidden = false;
     var r = target.getBoundingClientRect();
     var w = tip.offsetWidth;
@@ -199,6 +226,8 @@
         b.dataset.day = fmtDay.format(ms) + (i === 0 ? ' (today)' : '');
         var mins = downMinutes(outages, c.id, key, now);
         b.dataset.note = state === 'none' ? 'No checks' : mins ? 'Down for ' + duration(mins) : state === 'slow' ? 'Slow or failing at times' : 'No problems';
+        var spans = outageSpans(outages, c.id, key, now);
+        if (spans.length) b.dataset.spans = spans.map(function (sp) { return spanText(sp, key); }).join('|');
         b.addEventListener('mouseenter', function (ev) { showTip(ev.currentTarget); });
         b.addEventListener('mouseleave', hideTip);
         bars.appendChild(b);

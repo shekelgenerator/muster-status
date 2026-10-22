@@ -46,6 +46,22 @@ describe('page helpers', () => {
     assert.equal(S.downMinutes(o, 'calls', '2026-10-21', NOW), 20 + 30);
     assert.equal(S.downMinutes(o, 'messages', '2026-10-21', NOW), 0);
   });
+  // Sam, 22 Oct: hovering a day shows each outage's start and end, UK time.
+  test('outage times for a day, in UK time: "22:14–22:52", "now" while open, the date when it is another day', () => {
+    const o = [
+      { component: 'calls', started_at: '2026-10-21T21:14:00Z', ended_at: '2026-10-21T21:52:00Z' }, // BST: 22:14–22:52
+      { component: 'calls', started_at: '2026-10-21T22:50:00Z', ended_at: '2026-10-21T23:40:00Z' }, // 23:50 to 00:40 the next day
+      { component: 'calls', started_at: '2026-10-22T08:00:00Z', ended_at: null },
+      { component: 'website', started_at: '2026-10-21T10:00:00Z', ended_at: '2026-10-21T10:10:00Z' },
+    ];
+    const now = Date.parse('2026-10-22T09:00:00Z');
+    assert.deepEqual(S.outageSpans(o, 'calls', '2026-10-21', now).map((x) => S.spanText(x, '2026-10-21')), ['22:14\u201322:52', '23:50\u201322 Oct 00:40']);
+    assert.deepEqual(S.outageSpans(o, 'calls', '2026-10-22', now).map((x) => S.spanText(x, '2026-10-22')), ['09:00\u2013now']);
+    assert.deepEqual(S.outageSpans(o, 'calls', '2026-10-20', now), []);
+    // Winter time: UK time is UTC.
+    const winter = [{ component: 'calls', started_at: '2026-12-01T22:14:00Z', ended_at: '2026-12-01T22:52:00Z' }];
+    assert.deepEqual(S.outageSpans(winter, 'calls', '2026-12-01', now).map((x) => S.spanText(x, '2026-12-01')), ['22:14\u201322:52']);
+  });
   test('times and durations in plain words', () => {
     assert.equal(S.ago(NOW - 20e3, NOW), 'just now');
     assert.equal(S.ago(NOW - 60e3, NOW), '1 minute ago');
@@ -183,6 +199,14 @@ describe('the page in a browser', { skip: chromium ? false : 'Playwright is not 
     // the tooltip on a bad day
     await page.locator('.comp[data-id="calls"] .bar.down').hover();
     assert.match(await page.textContent('.tip'), /Down for 1 h 30 min/);
+    // ...and when the outage started and ended, UK time (Sam, 22 Oct)
+    const o = fixtures(Date.now()).up['outages.json'][0];
+    const fmt = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso));
+    const spans = await page.locator('.tip .tip-span').allTextContents();
+    assert.equal(spans.length, 1);
+    assert.ok(spans[0].startsWith(fmt(o.started_at)) || spans[0].includes(' ' + fmt(o.started_at)), spans[0]);
+    assert.ok(spans[0].endsWith(fmt(o.ended_at)), spans[0]);
+    assert.match(spans[0], /^(\d+ \w+ )?\d\d:\d\d\u2013(\d+ \w+ )?\d\d:\d\d$/);
     assert.deepEqual(errors, []);
     await ctx.close();
   });

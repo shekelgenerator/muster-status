@@ -75,44 +75,85 @@ describe('outages', () => {
   });
 });
 
-// Sam, 22 Oct: down only after two failed checks in a row.
+// Sam, 22 Oct: down only after two failed checks in a row. A failure is
+// rechecked a minute later in the same round, not 5 minutes (or, as GitHub
+// actually runs schedules, 30-45 minutes) later.
 describe('two failed checks in a row', () => {
-  test('one failure is a blip: shown as it was, not down', () => {
-    const k = C.confirm({ status: 'up', fails: 0 }, 'down', T);
-    assert.deepEqual(k, { status: 'up', fails: 1, first_failed_at: '2026-10-21T12:00:00.000Z', last_failed_at: '2026-10-21T12:00:00.000Z', unconfirmed: true });
-    assert.equal(C.confirm({ status: 'slow', fails: 0 }, 'down', T).status, 'slow');
-    assert.equal(C.confirm(null, 'down', T).status, 'up', 'the very first run');
-    assert.equal(C.dayStateOf(k), 'slow', 'it counts as slow for the day');
+  const F = '2026-10-21T11:59:00.000Z'; // when the first check failed
+  test('fail then fail on the recheck: down, dated from the first failure', () => {
+    const k = C.confirm({ status: 'up', fails: 0 }, 'down', T, { ok: false, failed_at: F });
+    assert.deepEqual(k, { status: 'down', fails: 1, first_failed_at: F, last_failed_at: '2026-10-21T12:00:00.000Z' });
+    assert.equal(C.dayStateOf(k), 'down');
+    assert.equal(C.confirm(null, 'down', T, { failed_at: F }).status, 'down', 'the very first round');
   });
-  test('the second failure in a row marks it down, dated from the first', () => {
-    const first = C.confirm({ status: 'up', fails: 0 }, 'down', T);
-    const second = C.confirm(Object.assign({ status: first.status }, first), 'down', T + 300e3);
-    assert.equal(second.status, 'down');
-    assert.equal(second.fails, 2);
-    assert.equal(second.first_failed_at, '2026-10-21T12:00:00.000Z');
-    assert.equal(second.last_failed_at, '2026-10-21T12:05:00.000Z');
-    assert.equal(C.dayStateOf(second), 'down');
+  test('fail then pass on the recheck: a blip, shown working, counted slow for the day', () => {
+    const k = C.confirm({ status: 'up', fails: 0 }, 'up', T, { ok: true, blip: true, failed_at: F });
+    assert.deepEqual(k, { status: 'up', fails: 0, first_failed_at: F, last_failed_at: F, blip: true });
+    assert.equal(C.dayStateOf(k), 'slow');
+    assert.equal(C.dayStateOf(C.confirm(null, 'up', T, { ok: true })), 'up');
   });
-  test('a pass in between starts the count again', () => {
-    const k = C.confirm({ status: 'up', fails: 0 }, 'down', T);
-    const back = C.confirm(Object.assign({ status: 'up' }, k), 'up', T + 300e3);
-    assert.equal(back.fails, 0);
-    const again = C.confirm(Object.assign({ status: 'up' }, back), 'down', T + 600e3);
-    assert.equal(again.status, 'up');
-    assert.equal(again.fails, 1);
+  test('still down: keeps the first failure, counts the rounds', () => {
+    const k1 = C.confirm({ status: 'up', fails: 0 }, 'down', T, { failed_at: F });
+    const k2 = C.confirm(Object.assign({}, k1), 'down', T + 300e3, { failed_at: '2026-10-21T12:05:00.000Z' });
+    assert.equal(k2.status, 'down');
+    assert.equal(k2.fails, 2);
+    assert.equal(k2.first_failed_at, F);
+    assert.equal(k2.last_failed_at, '2026-10-21T12:05:00.000Z');
   });
   test('a status.json from before this change: already down stays down', () => {
     const k = C.confirm({ status: 'down', since: '2026-10-21T11:00:00.000Z' }, 'down', T);
     assert.equal(k.status, 'down');
     assert.equal(k.first_failed_at, '2026-10-21T11:00:00.000Z');
+    assert.equal(k.fails, 2);
   });
-  test('the day counts: a lone failure is slow, and moves to down when the next check confirms it', () => {
-    let d = C.updateDaily({}, { calls: 'slow' }, T);
-    assert.deepEqual(d.calls['2026-10-21'], { n: 1, up: 0, slow: 1, down: 0 });
-    d = C.updateDaily(d, { calls: 'down' }, T + 300e3, [{ id: 'calls', day: '2026-10-21' }]);
-    assert.deepEqual(d.calls['2026-10-21'], { n: 2, up: 0, slow: 0, down: 2 });
-    d = C.updateDaily(d, { calls: 'down' }, T + 600e3, [{ id: 'calls', day: '2026-10-21' }]);
-    assert.deepEqual(d.calls['2026-10-21'], { n: 3, up: 0, slow: 0, down: 3 }, 'nothing to move: unchanged');
+  test('one component: pass is one check; fail is rechecked after the wait; already down is not', async () => {
+    const seen = [];
+    const answers = (list) => async (c) => { seen.push(c); return list.shift(); };
+    let clock = Date.parse(F);
+    const opts = (list) => ({ check: answers(list), wait: 1, clock: () => clock });
+    assert.deepEqual(await C.checkTwice('x', false, opts([{ ok: true, ms: 5 }])), { ok: true, ms: 5 });
+    assert.equal(seen.length, 1);
+    seen.length = 0;
+    assert.deepEqual(await C.checkTwice('x', false, opts([{ ok: false, detail: 'HTTP 502' }, { ok: true, ms: 7 }])), { ok: true, ms: 7, blip: true, failed_at: F });
+    assert.equal(seen.length, 2);
+    seen.length = 0;
+    assert.deepEqual(await C.checkTwice('x', false, opts([{ ok: false, detail: 'a' }, { ok: false, detail: 'HTTP 502' }])), { ok: false, detail: 'HTTP 502', failed_at: F });
+    assert.equal(seen.length, 2);
+    seen.length = 0;
+    assert.deepEqual(await C.checkTwice('x', true, opts([{ ok: false, detail: 'HTTP 502' }])), { ok: false, detail: 'HTTP 502', failed_at: F });
+    assert.equal(seen.length, 1, 'already down: no recheck');
+    assert.equal(C.RECHECK_AFTER_MS, 60e3, 'the recheck is a minute later');
+  });
+});
+
+// GitHub starts scheduled runs 30-45 minutes apart, so a run checks every 5
+// minutes itself.
+describe('a round every 5 minutes', () => {
+  test('rounds on the 5 minutes for the time given, saving after each', async () => {
+    let t = 0;
+    const rounds = [];
+    const saves = [];
+    const out = await C.loop('d', {
+      forMs: 55 * 60e3,
+      clock: () => t,
+      sleep: async (ms) => { t += ms; },
+      round: async () => { rounds.push(t); t += 70e3; return { at: t }; }, // a round with a recheck takes about a minute
+      save: async (dir, s) => { saves.push([dir, s.at]); },
+    });
+    assert.deepEqual(rounds.map((x) => x / 60e3), [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
+    assert.equal(out.length, 11);
+    assert.equal(saves.length, 11);
+    assert.equal(saves[0][0], 'd');
+    assert.equal(C.ROUND_EVERY_MS, 5 * 60e3);
+  });
+  test('a save that fails is logged, and the rounds carry on', async (t) => {
+    let now = 0;
+    let n = 0;
+    t.mock.method(console, 'error', () => {});
+    const out = await C.loop('d', { forMs: 10 * 60e3, clock: () => now, sleep: async (ms) => { now += ms; }, round: async () => ({}), save: async () => { n += 1; throw new Error('push refused'); } });
+    assert.equal(out.length, 2);
+    assert.equal(n, 2);
+    assert.equal(console.error.mock.calls.length, 2);
   });
 });
 
@@ -121,19 +162,21 @@ describe('status.json', () => {
     { id: 'website', name: 'Website', description: 'd', check: { slowMs: 1000 } },
     { id: 'calls', name: 'Calls', description: 'd', check: { slowMs: 1000 } },
   ];
-  test('names, states, latency and the reason when down (two failures in a row)', () => {
-    const fail = { website: { ok: true, ms: 123.6 }, calls: { ok: false, ms: 10000, detail: 'HTTP 503' } };
-    const once = C.buildStatus(comps, fail, null, T);
-    assert.equal(once.overall, 'up', 'one failure is not an outage');
-    assert.equal(once.components[1].detail, null);
-    assert.equal(once.components[1].unconfirmed, true);
-    const s = C.buildStatus(comps, fail, once, T + 300e3);
+  test('names, states, latency and the reason when down', () => {
+    const s = C.buildStatus(comps, { website: { ok: true, ms: 123.6 }, calls: { ok: false, ms: 10000, detail: 'HTTP 503', failed_at: '2026-10-21T11:59:00.000Z' } }, null, T);
     assert.equal(s.overall, 'down');
-    assert.equal(s.updated_at, '2026-10-21T12:05:00.000Z');
+    assert.equal(s.updated_at, '2026-10-21T12:00:00.000Z');
     assert.deepEqual(s.components[0], { id: 'website', name: 'Website', description: 'd', status: 'up', latency_ms: 124, detail: null, since: '2026-10-21T12:00:00.000Z', fails: 0, first_failed_at: null, last_failed_at: null });
     assert.equal(s.components[1].latency_ms, null);
     assert.equal(s.components[1].detail, 'HTTP 503');
-    assert.equal(s.components[1].since, '2026-10-21T12:00:00.000Z', 'down since the first failed check');
+    assert.equal(s.components[1].since, '2026-10-21T11:59:00.000Z', 'down since the first failed check');
+  });
+  test('a blip shows as working, with no reason, and is marked', () => {
+    const s = C.buildStatus(comps, { website: { ok: true, ms: 1 }, calls: { ok: true, ms: 50, blip: true, failed_at: '2026-10-21T11:59:00.000Z' } }, null, T);
+    assert.equal(s.overall, 'up');
+    assert.equal(s.components[1].status, 'up');
+    assert.equal(s.components[1].detail, null);
+    assert.equal(s.components[1].blip, true);
   });
   test('since stays when the state is unchanged, moves when it changes', () => {
     const prev = C.buildStatus(comps, { website: { ok: true, ms: 1 }, calls: { ok: true, ms: 1 } }, null, T);
@@ -141,9 +184,8 @@ describe('status.json', () => {
     assert.equal(next.components[0].since, '2026-10-21T12:00:00.000Z');
     assert.equal(next.components[1].since, '2026-10-21T12:05:00.000Z');
   });
-  test('a component with no result counts as a failed check', () => {
-    const once = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, null, T);
-    const s = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, once, T + 300e3);
+  test('a component with no result counts as down', () => {
+    const s = C.buildStatus(comps, { website: { ok: true, ms: 1 } }, null, T);
     assert.equal(s.components[1].status, 'down');
     assert.equal(s.components[1].detail, 'not checked');
   });
@@ -216,29 +258,36 @@ describe('a whole run', () => {
       { id: 'website', name: 'Website', description: 'd', check: { kind: 'http', slowMs: 1000 } },
       { id: 'calls', name: 'Calls', description: 'd', check: { kind: 'http', slowMs: 1000 } },
     ];
-    let callsUp = false;
-    const fake = async (c) => (c === comps[1].check && !callsUp ? { ok: false, ms: 1, detail: 'HTTP 502' } : { ok: true, ms: 50 });
+    // calls answers from this list, one per check; then fine.
+    let callsAnswers = [];
+    const fake = async (c) => (c === comps[1].check && callsAnswers.length ? callsAnswers.shift() : { ok: true, ms: 50 });
+    const fail = { ok: false, ms: 1, detail: 'HTTP 502' };
     const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-    // A blip: one failed check, then fine. No outage; the day shows one slow.
-    await C.main(dir, comps, T, fake);
-    assert.deepEqual(read('outages.json'), []);
-    callsUp = true;
-    let s = await C.main(dir, comps, T + 300e3, fake);
+    let now = T;
+    const round = (at) => { now = at; return C.main(dir, comps, null, fake, { recheckMs: 0, clock: () => now }); };
+    // A blip: fails, fine on the recheck. No outage; the day shows one slow.
+    callsAnswers = [fail];
+    let s = await round(T);
     assert.equal(s.overall, 'up');
+    assert.deepEqual(read('outages.json'), []);
+    s = await round(T + 300e3);
     assert.deepEqual(read('daily.json').calls['2026-10-21'], { n: 2, up: 1, slow: 1, down: 0 });
     assert.deepEqual(read('outages.json'), []);
-    // A real outage: three failed checks in a row, then the run that finds it
-    // back is 40 minutes late. It's dated from the first failure to the last.
-    callsUp = false;
-    await C.main(dir, comps, T + 600e3, fake);
-    s = await C.main(dir, comps, T + 900e3, fake);
-    assert.equal(s.overall, 'down');
-    await C.main(dir, comps, T + 1200e3, fake);
-    callsUp = true;
-    s = await C.main(dir, comps, T + 1200e3 + 40 * 60e3, fake);
+    // A real outage: fails and fails the recheck at 12:10, still failing at
+    // 12:15 and 12:20 (no recheck needed), back at 12:25. It runs from the
+    // first failure to the last.
+    callsAnswers = [fail, fail];
+    s = await round(T + 600e3);
+    assert.equal(s.overall, 'down', 'down in the same round, not 5 minutes later');
+    callsAnswers = [fail];
+    await round(T + 900e3);
+    callsAnswers = [fail];
+    await round(T + 1200e3);
+    assert.deepEqual(callsAnswers, [], 'no recheck while already down');
+    s = await round(T + 1500e3);
     assert.equal(s.overall, 'up');
     assert.deepEqual(read('outages.json'), [{ component: 'calls', started_at: '2026-10-21T12:10:00.000Z', ended_at: '2026-10-21T12:20:00.000Z', last_failed_at: '2026-10-21T12:20:00.000Z', checks: 3 }]);
-    assert.deepEqual(read('daily.json').calls['2026-10-21'], { n: 6, up: 2, slow: 1, down: 3 }, 'the first failure of the outage moved from slow to down');
+    assert.deepEqual(read('daily.json').calls['2026-10-21'], { n: 6, up: 2, slow: 1, down: 3 });
   });
   test('the real config: every component has a name, description and a check the runner knows', () => {
     const comps = require('../components');

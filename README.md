@@ -6,8 +6,9 @@ It runs entirely on GitHub, away from Render and the call server, so it keeps wo
 
 ## How it works
 
-- **Checks:** `.github/workflows/check.yml` runs `check.js` every 5 minutes. GitHub may start a run a few minutes late; the page says so if the last check is over 30 minutes old.
-  - Each service is checked from outside, with one retry before a failure counts.
+- **Checks:** `.github/workflows/check.yml` runs `check.js data --for 55 --save save.sh`: a round of checks every 5 minutes for 55 minutes, pushing the data branch after each. GitHub starts scheduled runs 30–45 minutes apart rather than every 5, so each run keeps checking by itself, and the schedule keeps the next run waiting to start when it ends. The page says so if the last check is over 30 minutes old.
+  - Each service is checked from outside, with a quick retry (5 seconds) for a dropped connection.
+  - A service is down only when two checks in a row fail: a failed check is checked again a minute later. Fail then fail is down, dated from the first failure. Fail then pass is a blip, shown as working and counted as "slow" for the day. An outage ends at its last failed check.
   - The results go to the `data` branch: `status.json` (now), `daily.json` (per day, 90 days) and `outages.json`.
   - That branch is always a single commit, replaced each run, so the repository doesn't grow.
 - **The page:** `docs/` is served by GitHub Pages. It reads the data branch through raw.githubusercontent.com and refreshes every minute. It loads nothing from anywhere else: no trackers, and the fonts are self-hosted.

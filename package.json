@@ -6,6 +6,6 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "check": "node check.js data",
-    "test": "node --test test/check.test.js test/page.test.js"
+    "test": "node --test test/check.test.js test/page.test.js test/fetch.test.js"
   }
 }

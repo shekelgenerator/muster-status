@@ -32,7 +32,9 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: git clone --quiet --depth 1 --branch data "https://x-access-token:${TOKEN}@github.com/${REPO}.git" data || mkdir -p data
+        # Starts empty only when the branch doesn't exist yet; any other failure
+        # stops the run rather than wiping the history (M20, 23 Oct).
+        run: sh fetch.sh "https://x-access-token:${TOKEN}@github.com/${REPO}.git" data
       - name: Check every 5 minutes for 55 minutes, saving after each round
         env:
           REPO: ${{ github.repository }}

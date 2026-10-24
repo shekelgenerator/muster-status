@@ -1,0 +1,27 @@
+[
+ {
+  "component": "calls",
+  "started_at": "2026-10-21T21:14:08.767Z",
+  "down_to_up": {
+   "2026-10-21": 1
+  },
+  "note": "Checker could not reach the call server; it was working."
+ },
+ {
+  "component": "calls",
+  "started_at": "2026-10-22T11:41:18.831Z",
+  "down_to_up": {
+   "2026-10-22": 11
+  },
+  "note": "Checker could not reach the call server; it was working."
+ },
+ {
+  "component": "calls",
+  "started_at": "2026-10-22T23:24:45.964Z",
+  "down_to_up": {
+   "2026-10-22": 7,
+   "2026-10-23": 4
+  },
+  "note": "Checker could not reach the call server; it was working."
+ }
+]

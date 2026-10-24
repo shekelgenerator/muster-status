@@ -8,6 +8,7 @@ It runs entirely on GitHub, away from Render and the call server, so it keeps wo
 
 - **Checks:** `.github/workflows/check.yml` runs `check.js data --for 55 --save save.sh`: a round of checks every 5 minutes for 55 minutes, pushing the data branch after each. GitHub starts scheduled runs 30–45 minutes apart rather than every 5, so each run keeps checking by itself, and the schedule keeps the next run waiting to start when it ends. The page says so if the last check is over 30 minutes old.
   - Each service is checked from outside, with a quick retry (5 seconds) for a dropped connection.
+  - **Second opinion (calls):** if the checker can't reach the call server, it asks Muster (`/api/health/calls`, which reports Muster's own probe of the call server). Only "up" from Muster clears the failure; "down", "unknown", "off", an error or no answer leave it standing. Added 24 Oct after one GitHub machine couldn't reach the call server for 50 minutes, three times, while calls were working.
   - A service is down only when two checks in a row fail: a failed check is checked again a minute later. Fail then fail is down, dated from the first failure. Fail then pass is a blip, shown as working and counted as "slow" for the day. An outage ends at its last failed check.
   - The results go to the `data` branch: `status.json` (now), `daily.json` (per day, 90 days) and `outages.json`.
   - That branch is always a single commit, replaced each run, so the repository doesn't grow.
@@ -59,6 +60,10 @@ Add an entry to `docs/incidents.json` and push to `main`; the page shows it with
 - **Open or past:** an incident stays under **Happening now** until its newest update is `resolved`. It then shows under **The last 14 days**.
 - **Automatic outages:** the checks also add outages on their own. When an incident you posted covers the same service and time, only your incident is shown.
 - **Component ids:** `website`, `api`, `messages`, `calls`, `desktop`.
+
+## Correcting the history
+
+`docs/corrections.json` lists outages that were the checker's fault (component, start time, and how many down checks per UTC day to count as working). The page applies it when drawing, so the data branch is never edited by hand (a running check would overwrite it). Post an incident as well, so the page says what happened. The three false call outages of 21 and 22 Oct are listed there.
 
 ## Tests
 

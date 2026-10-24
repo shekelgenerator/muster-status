@@ -91,6 +91,36 @@ describe('page helpers', () => {
   });
 });
 
+describe('corrections', () => {
+  const real = require('../docs/corrections.json');
+  const daily = { calls: { '2026-10-22': { n: 210, up: 192, slow: 0, down: 18 }, '2026-10-23': { n: 316, up: 312, slow: 0, down: 4 } }, website: { '2026-10-22': { n: 5, up: 5, slow: 0, down: 0 } } };
+  const out = [
+    { component: 'calls', started_at: '2026-10-22T11:41:18.831Z', ended_at: '2026-10-22T12:31:43.884Z' },
+    { component: 'calls', started_at: '2026-10-22T23:24:45.964Z', ended_at: '2026-10-23T00:15:11.018Z' },
+    { component: 'calls', started_at: '2026-10-24T09:00:00.000Z', ended_at: '2026-10-24T09:20:00.000Z' }, // a real one
+    { component: 'website', started_at: '2026-10-22T11:41:18.831Z', ended_at: '2026-10-22T12:00:00.000Z' }, // same start, other service
+  ];
+  test('the three false call outages are removed, a real one and other services stay', () => {
+    const f = S.correct(daily, out, real);
+    assert.deepEqual(f.outages.map((o) => o.component + o.started_at.slice(0, 13)), ['calls2026-10-24T09', 'website2026-10-22T11']);
+    assert.deepEqual(f.daily.calls['2026-10-22'], { n: 210, up: 210, slow: 0, down: 0 });
+    assert.deepEqual(f.daily.calls['2026-10-23'], { n: 316, up: 316, slow: 0, down: 0 });
+    assert.equal(S.dayState(f.daily.calls['2026-10-22']), 'up');
+    assert.deepEqual(daily.calls['2026-10-22'], { n: 210, up: 192, slow: 0, down: 18 }, 'the data itself is not changed');
+  });
+  test('never moves more than were down, ignores unknown days, and an empty list changes nothing', () => {
+    const f = S.correct({ calls: { '2026-10-22': { n: 3, up: 2, slow: 0, down: 1 } } }, [], [{ component: 'calls', started_at: 'x', down_to_up: { '2026-10-22': 50, '2020-01-01': 3 } }]);
+    assert.deepEqual(f.daily.calls['2026-10-22'], { n: 3, up: 3, slow: 0, down: 0 });
+    assert.deepEqual(S.correct(daily, out, []), { daily, outages: out });
+    assert.deepEqual(S.correct(null, null, null), { daily: {}, outages: [] });
+  });
+  test('the posted incidents cover the three windows', () => {
+    const inc = require('../docs/incidents.json');
+    assert.equal(inc.length, 3);
+    for (const i of inc) { assert.deepEqual(i.components, ['calls']); assert.equal(i.updates[0].stage, 'resolved'); }
+  });
+});
+
 // ── browser ──────────────────────────────────────────────────────────────
 
 let chromium = null;
@@ -150,6 +180,7 @@ describe('the page in a browser', { skip: chromium ? false : 'Playwright is not 
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(body));
       }
+      if (u.pathname === '/corrections.json') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('[]'); } // the real list is for the real data
       if (u.pathname === '/incidents.json' && req.headers['x-test-incidents'] !== 'none') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(u.searchParams.get('t') && server.incidents ? incidents : []));

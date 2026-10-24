@@ -177,8 +177,27 @@ function checkWs(c) {
   });
 }
 
+// A check can name a second opinion (`ask`): when this machine can't get an
+// answer, Muster is asked whether it can. "up" from Muster means the service
+// is fine and only this runner can't reach it (22 Oct: three false call
+// outages, each one runner for its whole life), so it isn't an outage. Any
+// other answer, or none, leaves the failure standing.
+async function secondOpinion(c, first) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(c.ask.url, { signal: ctl.signal, redirect: 'manual', headers: { 'user-agent': 'muster-status (+https://status.musterchat.com)', 'cache-control': 'no-cache' } });
+    if (res.status !== 200) return first;
+    const body = await res.json();
+    if (body && body[c.ask.key] === 'up') return { ok: true, ms: null, detail: 'not reachable from the checker, answering for Muster', second_opinion: true };
+  } catch (e) { /* no second opinion: the failure stands */ } finally { clearTimeout(timer); }
+  return first;
+}
+
 async function runCheck(c) {
-  return c.kind === 'ws' ? checkWs(c) : checkHttp(c);
+  if (c.kind === 'ws') return checkWs(c);
+  const r = await checkHttp(c);
+  return r.ok || !c.ask ? r : secondOpinion(c, r);
 }
 
 // A failure is tried once more before it counts, so one dropped packet

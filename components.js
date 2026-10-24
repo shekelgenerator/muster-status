@@ -9,6 +9,8 @@
 //   ws    — open a WebSocket; up when the first message passes `message`.
 //
 // slowMs: answered, but slower than this, counts as "slow" (degraded).
+// ask:    (http, optional) a second opinion when the check fails: a URL that
+//         answers JSON, and the key that must say "up" to clear the failure.
 
 module.exports = [
   {
@@ -45,7 +47,9 @@ module.exports = [
     id: 'calls',
     name: 'Voice and video calls',
     description: 'Calls, screen sharing and Listen together',
-    check: { kind: 'http', url: 'https://rtc.musterchat.com/', expect: [200], slowMs: 3000 },
+    // `ask`: when the checker can't reach the call server, Muster is asked too
+    // (it probes every 30 s from Render). Only "up" from Muster clears it.
+    check: { kind: 'http', url: 'https://rtc.musterchat.com/', expect: [200], slowMs: 3000, ask: { url: 'https://www.musterchat.com/api/health/calls', key: 'calls' } },
   },
   {
     id: 'desktop',

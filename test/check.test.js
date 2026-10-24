@@ -231,6 +231,37 @@ describe('checks against a local server', () => {
     assert.ok(slow.ok && slow.ms >= 250, 'time is measured');
     assert.deepEqual(await C.checkHttp({ url: 'http://127.0.0.1:1/', expect: [200] }).then((r) => [r.ok, r.detail]), [false, 'could not connect']);
   });
+  // 22 Oct: one GitHub runner couldn't reach the call server for 50 minutes and
+  // the page showed three outages while Muster's own probe said it was up.
+  test('second opinion: only "up" from Muster clears a failed check', async (t) => {
+    let answer = { code: 200, body: '{"calls":"up"}' };
+    const ask = http.createServer((req, res) => { res.writeHead(answer.code, { 'content-type': 'application/json' }); res.end(answer.body); });
+    await new Promise((r) => ask.listen(0, '127.0.0.1', r));
+    t.after(() => { ask.closeAllConnections(); ask.close(); });
+    const c = { url: 'http://127.0.0.1:1/', expect: [200], ask: { url: `http://127.0.0.1:${ask.address().port}/`, key: 'calls' } };
+    const up = await C.checkHttp(c);
+    assert.equal(up.ok, false, 'checkHttp alone still fails');
+    // through the same path a round uses
+    const run = async (cc) => (await C.checkWithRetry(cc, 1));
+    assert.deepEqual(await run(c).then((r) => [r.ok, r.ms, r.second_opinion === true]), [true, null, true], 'Muster says up: not an outage');
+    for (const a of [{ code: 200, body: '{"calls":"down"}' }, { code: 200, body: '{"calls":"unknown"}' }, { code: 200, body: '{"calls":"off"}' }, { code: 200, body: '{}' }, { code: 200, body: 'not json' }, { code: 503, body: '{"calls":"up"}' }, { code: 429, body: '{"calls":"up"}' }]) {
+      answer = a;
+      assert.equal((await run(c)).ok, false, `${a.code} ${a.body}: the failure stands`);
+    }
+    const dead = Object.assign({}, c, { ask: { url: 'http://127.0.0.1:1/', key: 'calls' } });
+    assert.equal((await run(dead)).ok, false, 'Muster unreachable: the failure stands');
+    answer = { code: 200, body: '{"calls":"up"}' };
+    const s = await server();
+    t.after(() => s.stop());
+    assert.equal((await run({ url: `http://127.0.0.1:${s.address().port}/nope`, expect: [200], ask: c.ask })).ok, true, 'a 503 from the call server is cleared the same way');
+    assert.equal((await run({ url: `http://127.0.0.1:${s.address().port}/ok`, expect: [200], ask: { url: 'http://127.0.0.1:1/', key: 'calls' } })).ok, true, 'an answer needs no second opinion');
+    assert.equal((await run({ url: 'http://127.0.0.1:1/', expect: [200] })).ok, false, 'no ask: unchanged');
+  });
+  test('only the call server asks, and it asks Muster\'s own route', () => {
+    const comps = require('../components');
+    assert.deepEqual(comps.filter((x) => x.check.ask).map((x) => x.id), ['calls']);
+    assert.equal(comps.find((x) => x.id === 'calls').check.ask.url, 'https://www.musterchat.com/api/health/calls');
+  });
   test('WebSocket: up on the right first message, down on the wrong one or none', async (t) => {
     const s = await server();
     t.after(() => s.stop());

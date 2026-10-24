@@ -127,7 +127,28 @@
     return { active: active.sort(newest), past: past.sort(newest) };
   }
 
-  var api = { dayKey: dayKey, downMinutes: downMinutes, outageSpans: outageSpans, spanText: spanText, dayState: dayState, uptime: uptime, headline: headline, ago: ago, duration: duration, events: events };
+  // docs/corrections.json: checks that were wrong, not the service (22 Oct:
+  // one GitHub runner couldn't reach the call server, three false outages).
+  // Applied when the page is drawn; the data itself is never edited. Each one
+  // names the outage by component and start, and how many down checks per UTC
+  // day to count as working instead.
+  function correct(daily, outages, corrections) {
+    var d = JSON.parse(JSON.stringify(daily || {}));
+    var out = (outages || []).slice();
+    (corrections || []).forEach(function (c) {
+      out = out.filter(function (o) { return !(o.component === c.component && o.started_at === c.started_at); });
+      var days = d[c.component] || {};
+      Object.keys(c.down_to_up || {}).forEach(function (k) {
+        var x = days[k];
+        if (!x) return;
+        var n = Math.min(c.down_to_up[k] | 0, x.down || 0);
+        x.down -= n; x.up = (x.up || 0) + n;
+      });
+    });
+    return { daily: d, outages: out };
+  }
+
+  var api = { correct: correct, dayKey: dayKey, downMinutes: downMinutes, outageSpans: outageSpans, spanText: spanText, dayState: dayState, uptime: uptime, headline: headline, ago: ago, duration: duration, events: events };
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
   window.MusterStatus = api;
 
@@ -294,11 +315,13 @@
       getJson(base + 'daily.json', {}),
       getJson(base + 'outages.json', []),
       getJson('incidents.json', []),
+      getJson('corrections.json', []),
     ]).then(function (r) {
       var now = Date.now();
+      var fixed = correct(r[1], r[2], r[4]);
       renderHero(r[0], now);
-      renderComponents(r[0], r[1], r[2], now);
-      renderEvents(r[0], r[3], r[2], now);
+      renderComponents(r[0], fixed.daily, fixed.outages, now);
+      renderEvents(r[0], r[3], fixed.outages, now);
       document.documentElement.dataset.loaded = '1';
     });
   }

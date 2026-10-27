@@ -114,10 +114,11 @@ describe('corrections', () => {
     assert.deepEqual(S.correct(daily, out, []), { daily, outages: out });
     assert.deepEqual(S.correct(null, null, null), { daily: {}, outages: [] });
   });
-  test('the posted incidents cover the three windows', () => {
-    const inc = require('../docs/incidents.json');
-    assert.equal(inc.length, 3);
-    for (const i of inc) { assert.deepEqual(i.components, ['calls']); assert.equal(i.updates[0].stage, 'resolved'); }
+  // Sam, 27 Oct: the three call notes were taken down (the checker faults
+  // aren't outages); the corrections still keep them out of the uptime.
+  test('no incidents are posted, and the three call windows stay corrected', () => {
+    assert.deepEqual(require('../docs/incidents.json'), []);
+    assert.equal(require('../docs/corrections.json').length, 3);
   });
 });
 

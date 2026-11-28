@@ -1,0 +1,66 @@
+{
+ "updated_at": "2026-11-28T11:01:34.780Z",
+ "overall": "down",
+ "components": [
+  {
+   "id": "website",
+   "name": "Website and app",
+   "description": "musterchat.com and the app in your browser",
+   "status": "down",
+   "latency_ms": null,
+   "detail": "HTTP 503",
+   "since": "2026-11-26T17:14:10.056Z",
+   "fails": 66,
+   "first_failed_at": "2026-11-26T17:14:10.056Z",
+   "last_failed_at": "2026-11-28T11:01:34.780Z"
+  },
+  {
+   "id": "api",
+   "name": "Sign-in and accounts",
+   "description": "Signing in, your account, servers and settings",
+   "status": "down",
+   "latency_ms": null,
+   "detail": "HTTP 503",
+   "since": "2026-11-26T17:14:10.108Z",
+   "fails": 66,
+   "first_failed_at": "2026-11-26T17:14:10.108Z",
+   "last_failed_at": "2026-11-28T11:01:34.780Z"
+  },
+  {
+   "id": "messages",
+   "name": "Messages",
+   "description": "Sending and receiving messages in real time",
+   "status": "down",
+   "latency_ms": null,
+   "detail": "could not connect",
+   "since": "2026-11-26T17:14:10.109Z",
+   "fails": 66,
+   "first_failed_at": "2026-11-26T17:14:10.109Z",
+   "last_failed_at": "2026-11-28T11:01:34.780Z"
+  },
+  {
+   "id": "calls",
+   "name": "Voice and video calls",
+   "description": "Calls, screen sharing and Listen together",
+   "status": "up",
+   "latency_ms": 746,
+   "detail": null,
+   "since": "2026-11-10T02:59:26.817Z",
+   "fails": 0,
+   "first_failed_at": null,
+   "last_failed_at": null
+  },
+  {
+   "id": "desktop",
+   "name": "Desktop app updates",
+   "description": "Downloads and automatic updates for the desktop app",
+   "status": "up",
+   "latency_ms": 414,
+   "detail": null,
+   "since": "2026-11-17T04:43:56.754Z",
+   "fails": 0,
+   "first_failed_at": null,
+   "last_failed_at": null
+  }
+ ]
+}
